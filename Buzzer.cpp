@@ -24,5 +24,6 @@ void Buzzer::turnOff() {
     if (isActive) {
         isActive = false;
         noTone(pin);
+        
     }
 }

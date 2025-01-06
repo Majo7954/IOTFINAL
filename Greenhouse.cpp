@@ -30,7 +30,7 @@ void Greenhouse::setup() {
     Serial.begin(115200);
     Serial.println("[Greenhouse] Initializing system...");
 
-    wifiManager.connect(); // Conexión a WiFi
+    wifiManager.connect();
 
     rainSensor.setup();
     ldrSensor.setup();
@@ -41,7 +41,7 @@ void Greenhouse::setup() {
 
     pump.setup();
     fan.init();
-    servo.init(); // Inicializa el servo
+    servo.init();
     yellowLED1.init();
     yellowLED2.init();
     redLED.init();
@@ -57,7 +57,7 @@ void Greenhouse::configureMQTT(const char* broker, int port, const char* clientI
     this->deltaTopic = deltaTopic;
 
     mqttClient->setCallback([this](char* topic, byte* payload, unsigned int length) {
-        payload[length] = '\0'; // Asegurarse de que el payload sea un string válido
+        payload[length] = '\0'; // Convertir a cadena válida
         this->handleDelta((const char*)payload);
     });
 }
@@ -72,9 +72,7 @@ void Greenhouse::reconnect(const char* clientId) {
         if (mqttClient->connect(clientId)) {
             Serial.println("[MQTT] Connected");
         } else {
-            Serial.print("[MQTT] Failed, rc=");
-            Serial.print(mqttClient->state());
-            Serial.println(" try again in 5 seconds");
+            Serial.printf("[MQTT] Failed, rc=%d. Retrying...\n", mqttClient->state());
             delay(5000);
         }
     }
@@ -84,9 +82,10 @@ void Greenhouse::loop() {
     if (!mqttClient->loop()) {
         reconnect("GreenhouseClient");
     }
+
     checkSensors();
-    controlActuators();
-    delay(5000); // Intervalo entre lecturas y acciones
+    publishState();
+    delay(5000);
 }
 
 void Greenhouse::checkSensors() {
@@ -107,47 +106,8 @@ void Greenhouse::checkSensors() {
         redLED.blink();
         buzzer.turnOn();
     } else {
-        Serial.println("[Sensors] No flame detected.");
         redLED.turnOff();
         buzzer.turnOff();
-    }
-}
-
-void Greenhouse::controlActuators() {
-    if (ldrSensor.isLightDetected()) {
-        yellowLED1.turnOff();
-        yellowLED2.turnOff();
-        Serial.println("[Lighting] Natural light detected, yellow LEDs turned off.");
-    } else {
-        yellowLED1.turnOn();
-        yellowLED2.turnOn();
-        Serial.println("[Lighting] No natural light, yellow LEDs turned on.");
-    }
-
-    if (soilMoisture < 30.0) {
-        pump.turnOn();
-        Serial.println("[Irrigation] Pump turned on for watering.");
-        delay(3000);
-        pump.turnOff();
-        Serial.println("[Irrigation] Pump turned off.");
-    }
-
-    if (temperature > 30.0) {
-        fan.turnOn();
-        Serial.println("[Ventilation] Fan turned on to reduce temperature.");
-        delay(3000);
-        fan.turnOff();
-        Serial.println("[Ventilation] Fan turned off.");
-    }
-
-    if (servoState == "closed") {
-        servo.open();
-        servoState = "open";
-        Serial.println("[Servo] Tank opened.");
-    } else {
-        servo.close();
-        servoState = "closed";
-        Serial.println("[Servo] Tank closed.");
     }
 }
 
@@ -160,22 +120,71 @@ void Greenhouse::readDHTSensor() {
     }
 }
 
+void Greenhouse::publishState() {
+    if (!mqttClient || !mqttClient->connected()) {
+        Serial.println("[Greenhouse] MQTT client not connected. Skipping state publication.");
+        return;
+    }
+
+    DynamicJsonDocument doc(1024);
+
+    doc["state"]["reported"]["sensors"]["soilMoisture"] = soilMoisture;
+    doc["state"]["reported"]["sensors"]["temperature"] = temperature;
+    doc["state"]["reported"]["sensors"]["humidity"] = humidity;
+    doc["state"]["reported"]["sensors"]["rainPercentage"] = rainPercentage;
+    doc["state"]["reported"]["sensors"]["lightDetected"] = lightDetected;
+
+    doc["state"]["reported"]["actuators"]["pumpState"] = pumpState;
+    doc["state"]["reported"]["actuators"]["fanState"] = fanState;
+    doc["state"]["reported"]["actuators"]["servoState"] = servoState;
+    doc["state"]["reported"]["actuators"]["yellowLEDsState"] = yellowLEDsState;
+
+    String json;
+    serializeJson(doc, json);
+
+    if (mqttClient->publish(updateTopic, json.c_str())) {
+        Serial.println("[Greenhouse] State published successfully.");
+    } else {
+        Serial.println("[Greenhouse] Failed to publish state.");
+    }
+}
+
 void Greenhouse::handleDelta(const char* payload) {
-    Serial.print("[MQTT] Delta message received: ");
-    Serial.println(payload);
+    Serial.printf("[MQTT] Delta message received: %s\n", payload);
 
     DynamicJsonDocument doc(1024);
     DeserializationError error = deserializeJson(doc, payload);
     if (error) {
-        Serial.print("[MQTT] Failed to parse JSON: ");
-        Serial.println(error.f_str());
+        Serial.printf("[MQTT] JSON Parse Error: %s\n", error.f_str());
         return;
     }
 
-    // Procesar el mensaje delta
     if (doc.containsKey("pump")) {
-        bool pumpCommand = doc["pump"];
-        pump.setState(pumpCommand);
-        Serial.printf("[Actuators] Pump state changed to: %s\n", pumpCommand ? "ON" : "OFF");
+        pumpState = doc["pump"];
+        pumpState ? pump.turnOn() : pump.turnOff();
     }
+
+    if (doc.containsKey("fan")) {
+        fanState = doc["fan"];
+        fanState ? fan.turnOn() : fan.turnOff();
+    }
+
+    if (doc.containsKey("servo")) {
+        servoState = doc["servo"].as<String>();
+        if (servoState == "open") {
+            servo.open();
+        } else if (servoState == "closed") {
+            servo.close();
+        }
+    }
+
+    if (doc.containsKey("yellowLEDs")) {
+        yellowLEDsState = doc["yellowLEDs"];
+        yellowLEDsState ? yellowLED1.turnOn() : yellowLED1.turnOff();
+        yellowLEDsState ? yellowLED2.turnOn() : yellowLED2.turnOff();
+    }
+
+    // Publicar el estado actualizado
+    publishState();
 }
+

@@ -11,14 +11,13 @@
 #include "FlameSensor.h"
 #include "Pump.h"
 #include "Fan.h"
+#include "Buzzer.h"
 #include "ServoMotor.h"
 #include "LED.h"
-#include "Buzzer.h"
 #include "WiFiManager.h"
 
 class Greenhouse {
 public:
-    // Constructor que acepta cliente WiFi y credenciales
     Greenhouse(WiFiClientSecure* client, const char* ssid, const char* password);
 
     void setup();
@@ -29,8 +28,7 @@ public:
     void reconnect(const char* clientId);
 
 private:
-    // Gestión de WiFi y MQTT
-    WiFiManager wifiManager;  // Ahora recibe credenciales desde el constructor
+    WiFiManager wifiManager;  // Conexión WiFi
     WiFiClientSecure* client;
     PubSubClient* mqttClient;
 
@@ -50,8 +48,8 @@ private:
     Buzzer buzzer;
 
     // MQTT Topics
-    String updateTopic;
-    String deltaTopic;
+    const char* updateTopic;
+    const char* deltaTopic;
 
     // Variables de sensores y estado
     float soilMoisture;
@@ -75,20 +73,11 @@ private:
 
     // Métodos auxiliares
     void checkSensors();
-    void controlActuators();
-    void publishShadow();
     void handleDelta(const char* payload);
-
-    // Handlers para actuadores
-    void handlePumpState(bool state);
-    void handleFanState(bool state);
-    void handleServoState(const String& state);
-    void handleYellowLEDsState(bool state);
 
     // Sensores específicos
     void readDHTSensor();
-    bool hasSensorValuesChanged() const;
-    void storeLastSensorValues();
+    void publishState();
 };
 
 #endif // GREENHOUSE_H
